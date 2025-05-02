@@ -1,0 +1,151 @@
+.App {
+  text-align: center;
+}
+
+body {
+  font-family: 'Roboto', sans-serif;
+  background-color: #f8f9fa;
+}
+
+/* Global container styling */
+.MuiContainer-root {
+  padding-top: 2rem;
+  padding-bottom: 2rem;
+}
+
+/* Improved typography */
+.MuiTypography-h4 {
+  font-weight: 700;
+  margin-bottom: 1.5rem;
+  color: #333; /* Darker, more standard heading color */
+  letter-spacing: -0.5px;
+}
+
+/* Card styling - General adjustments */
+.MuiPaper-root.MuiCard-root { /* Be more specific to target cards */
+  transition: box-shadow 0.25s ease, transform 0.25s ease; /* Slightly faster transition */
+  border-radius: 8px; /* Consistent rounded corners */
+}
+
+/* Remove generic task-card styles if TaskList handles hover specifically */
+/* .task-card {
+  transition: transform 0.2s ease;
+}
+
+.task-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+} */
+
+.urgency-indicator { /* Keep for potential other uses, but TaskList uses border/chips now */
+  width: 10px; /* Slightly smaller */
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 8px;
+}
+
+.urgency-1 {
+  background-color: #8bc34a;
+}
+
+.urgency-2 {
+  background-color: #4caf50;
+}
+
+.urgency-3 {
+  background-color: #ff9800;
+}
+
+.urgency-4 {
+  background-color: #f44336;
+}
+
+.urgency-5 {
+  background-color: #d32f2f;
+}
+
+/* Calendar day with tasks - Keep for month view if re-enabled */
+.calendar-day-with-tasks {
+  position: relative;
+}
+
+.calendar-day-with-tasks::after {
+  content: '';
+  position: absolute;
+  bottom: 3px; /* Adjust position */
+  left: 50%;
+  transform: translateX(-50%);
+  width: 5px; /* Slightly larger dot */
+  height: 5px;
+  border-radius: 50%;
+  background-color: #4285F4; /* Use primary color */
+}
+
+/* Remove old week view styles if TaskCalendar handles it */
+/* .week-view-container {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.time-slot {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+  min-height: 50px;
+  position: relative;
+} */
+
+/* Task list animations - Keep fadeIn */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.task-item {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+/* Improved form controls */
+.MuiFormControl-root {
+  margin-bottom: 1rem;
+}
+
+/* Button styling - General adjustments */
+.MuiButton-root {
+  text-transform: none; /* Keep lowercase */
+  border-radius: 6px; /* Consistent rounded corners */
+}
+
+.MuiButton-contained {
+  font-weight: 500;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); /* Softer shadow */
+  transition: all 0.2s ease;
+}
+
+.MuiButton-contained:hover {
+  transform: translateY(-1px); /* Subtle lift */
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+/* Chip styling - General adjustments */
+.MuiChip-root {
+  font-weight: 500;
+  border-radius: 6px; /* Consistent rounded corners */
+}
+
+/* Dialog styling */
+.MuiDialog-paper {
+  overflow: visible;
+}
+
+/* Calendar styling */
+.MuiPickersDay-root {
+  font-weight: 500;
+}
+
+/* Responsive adjustments */
+@media (max-width: 600px) {
+  .MuiContainer-root {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+  }
+}
