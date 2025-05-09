@@ -11,37 +11,87 @@ const HF_API_TOKEN = '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';
  */
 async function extractTaskFromContent(emailContent) {
   try {
-    // Task identification prompt
-    const taskPrompt = `Extract any task or to-do item from this text. If there's no task, respond with 'No task found': ${emailContent}`;
+    // Task identification and priority prompt
+    const taskPrompt = `Analyze this text and extract:
+1. The main task or to-do item
+2. Priority level (CRITICAL/HIGH/MEDIUM/LOW) based on urgency words and context
+3. Time constraints (specific start and end times)
+4. Hard deadline if mentioned
+
+If there's no task, respond with 'No task found'.
+
+Text: ${emailContent}`;
+    
     const taskResponse = await callHuggingFaceAPI(taskPrompt);
     
     if (taskResponse.includes('No task found')) {
       return null;
     }
     
-    // Task title is the first line of the response
-    const taskTitle = taskResponse.split('\n')[0].trim();
+    // Parse the structured response
+    const responseLines = taskResponse.split('\n').map(line => line.trim());
+    const taskTitle = responseLines[0];
     
-    // Extract due date if present
-    const dueDatePrompt = `Extract the due date or deadline from this text. If there's no specific date, respond with 'No date found': ${emailContent}`;
-    const dueDateResponse = await callHuggingFaceAPI(dueDatePrompt);
+    // Extract priority level
+    const priorityMap = {
+      'CRITICAL': 5,
+      'HIGH': 4,
+      'MEDIUM': 3,
+      'LOW': 2,
+      'NONE': 1
+    };
     
-    let dueDate = null;
-    if (!dueDateResponse.includes('No date found')) {
-      // Try to parse the date from the response
-      const dateMatch = dueDateResponse.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\w+ \d{1,2}(?:st|nd|rd|th)?, \d{4}|\w+ \d{1,2}(?:st|nd|rd|th)?|tomorrow|today|next \w+/i);
-      if (dateMatch) {
-        const dateStr = dateMatch[0];
-        // Convert various date formats to a standard format
-        dueDate = parseDateFromText(dateStr);
+    const priorityMatch = taskResponse.match(/Priority.*?:\s*(CRITICAL|HIGH|MEDIUM|LOW)/i);
+    const urgencyLevel = priorityMatch ? priorityMap[priorityMatch[1].toUpperCase()] : 3;
+    
+    // Extract time constraints
+    const timeMatch = taskResponse.match(/Time.*?:\s*(.+)/i);
+    let startTime = null;
+    let endTime = null;
+    
+    if (timeMatch) {
+      const timeStr = timeMatch[1];
+      const timeRangeMatch = timeStr.match(/(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*(?:to|-)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm))/i);
+      
+      if (timeRangeMatch) {
+        const [_, startStr, endStr] = timeRangeMatch;
+        const today = new Date();
+        
+        // Parse start time
+        const startParts = startStr.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+        if (startParts) {
+          let [__, hours, minutes, period] = startParts;
+          hours = parseInt(hours);
+          if (period.toLowerCase() === 'pm' && hours !== 12) hours += 12;
+          if (period.toLowerCase() === 'am' && hours === 12) hours = 0;
+          startTime = new Date(today);
+          startTime.setHours(hours, minutes ? parseInt(minutes) : 0, 0, 0);
+        }
+        
+        // Parse end time
+        const endParts = endStr.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
+        if (endParts) {
+          let [__, hours, minutes, period] = endParts;
+          hours = parseInt(hours);
+          if (period.toLowerCase() === 'pm' && hours !== 12) hours += 12;
+          if (period.toLowerCase() === 'am' && hours === 12) hours = 0;
+          endTime = new Date(today);
+          endTime.setHours(hours, minutes ? parseInt(minutes) : 0, 0, 0);
+        }
       }
     }
     
-    // Determine urgency level (1-5)
-    const urgencyPrompt = `Rate the urgency of this task on a scale of 1-5 (1 being lowest, 5 being highest): ${taskTitle}`;
-    const urgencyResponse = await callHuggingFaceAPI(urgencyPrompt);
-    const urgencyMatch = urgencyResponse.match(/[1-5]/);
-    const urgencyLevel = urgencyMatch ? parseInt(urgencyMatch[0]) : 3; // Default to medium urgency
+    // Extract deadline
+    const deadlineMatch = taskResponse.match(/Deadline.*?:\s*(.+)/i);
+    let dueDate = null;
+    
+    if (deadlineMatch) {
+      const deadlineStr = deadlineMatch[1];
+      const dateMatch = deadlineStr.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\w+ \d{1,2}(?:st|nd|rd|th)?, \d{4}|\w+ \d{1,2}(?:st|nd|rd|th)?|tomorrow|today|next \w+/i);
+      if (dateMatch) {
+        dueDate = parseDateFromText(dateMatch[0]);
+      }
+    }
     
     // Categorize the task
     const categoryPrompt = `Categorize this task into one of these categories: Work, Personal, Shopping, Health, Finance, Education, Other: ${taskTitle}`;
