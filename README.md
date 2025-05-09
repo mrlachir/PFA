@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # AI Planner
 
 AI Planner is a smart task management application that extracts tasks from your Gmail emails using Hugging Face NLP models. It automatically categorizes and prioritizes tasks, displaying them in both calendar and list views.
@@ -87,3 +88,6 @@ This application processes your emails locally in your browser. No email content
 ## License
 
 MIT
+=======
+# PFA
+>>>>>>> ed88a78847c8bd65f3f5823d4e1eec2a2fcaa636
