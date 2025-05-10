@@ -6,7 +6,9 @@ import EmailList from './components/EmailList';
 import TaskCalendar from './components/TaskCalendar';
 import TaskList from './components/TaskList';
 import GmailLogin from './components/GmailLogin';
+import TextInputTask from './components/TextInputTask';
 import { extractTasksFromEmails } from './services/taskExtractor';
+import { extractTasksFromText } from './services/extractTasksFromText';
 import './App.css';
 
 const theme = createTheme({
@@ -36,6 +38,7 @@ function App() {
   };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [textProcessing, setTextProcessing] = useState(false);
 
   // Process emails to extract tasks when emails change
   useEffect(() => {
@@ -60,6 +63,32 @@ function App() {
   const handleAuthSuccess = (authResult) => {
     setIsAuthenticated(true);
     fetchEmails();
+  };
+
+  // Handle text input submission for task generation
+  const handleTextSubmit = async (text) => {
+    setTextProcessing(true);
+    setError(null); // Clear any previous errors
+    try {
+      if (!text || text.trim() === '') {
+        throw new Error('Please enter some text to generate tasks');
+      }
+      
+      const extractedTasks = await extractTasksFromText(text);
+      
+      if (extractedTasks.length === 0) {
+        throw new Error('No tasks could be identified in the provided text');
+      }
+      
+      setTasks(prevTasks => [...prevTasks, ...extractedTasks]);
+      // Clear error state if successful
+      setError(null);
+    } catch (err) {
+      console.error('Text processing error:', err);
+      setError('Error processing text: ' + err.message);
+    } finally {
+      setTextProcessing(false);
+    }
   };
 
   // Fetch emails from Gmail API
@@ -117,6 +146,10 @@ function App() {
                 <Typography color="error" align="center">{error}</Typography>
               ) : (
                 <Box>
+                  <TextInputTask 
+                    onTextSubmit={handleTextSubmit} 
+                    loading={textProcessing} 
+                  />
                   <Grid container spacing={3}>
                     <Grid item xs={12} md={8}>
                       <TaskCalendar tasks={tasks.map(task => ({
