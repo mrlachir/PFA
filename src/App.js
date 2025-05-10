@@ -1,14 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
-import { Container, Box, Typography, CircularProgress, Grid } from '@mui/material';
+import { Container, Box, Typography, CircularProgress, Grid, Tabs, Tab, AppBar, Toolbar } from '@mui/material';
 import EmailList from './components/EmailList';
 import TaskCalendar from './components/TaskCalendar';
 import TaskList from './components/TaskList';
 import GmailLogin from './components/GmailLogin';
 import TextInputTask from './components/TextInputTask';
+import EmailTaskSettings from './components/EmailTaskSettings';
+import NotificationCenter, { showNotification } from './components/NotificationCenter';
 import { extractTasksFromEmails } from './services/taskExtractor';
 import { extractTasksFromText } from './services/extractTasksFromText';
+import { initializeEmailScheduler } from './services/emailScheduler';
+import { initializeNotifications } from './services/notificationService';
 import './App.css';
 
 const theme = createTheme({
@@ -29,6 +33,7 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [emails, setEmails] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [activeTab, setActiveTab] = useState(0);
   
   // Handle task updates
   const handleTaskUpdate = (updatedTask) => {
@@ -40,6 +45,19 @@ function App() {
   const [error, setError] = useState(null);
   const [textProcessing, setTextProcessing] = useState(false);
 
+  // Initialize email extraction and notification services
+  useEffect(() => {
+    // Initialize notification service
+    initializeNotifications();
+    
+    // Initialize email scheduler with default settings
+    initializeEmailScheduler({
+      enabled: true,
+      intervalMinutes: 60,
+      extractOnStartup: true
+    });
+  }, []);
+
   // Process emails to extract tasks when emails change
   useEffect(() => {
     const processTasks = async () => {
@@ -47,7 +65,7 @@ function App() {
         setLoading(true);
         try {
           const extractedTasks = await extractTasksFromEmails(emails);
-          setTasks(extractedTasks);
+          setTasks(prevTasks => [...prevTasks, ...extractedTasks]);
         } catch (err) {
           setError('Error processing tasks: ' + err.message);
         } finally {
@@ -58,6 +76,11 @@ function App() {
 
     processTasks();
   }, [emails]);
+  
+  // Handle tab change
+  const handleTabChange = (event, newValue) => {
+    setActiveTab(newValue);
+  };
 
   // Handle successful Gmail authentication
   const handleAuthSuccess = (authResult) => {
@@ -128,59 +151,60 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Container maxWidth="lg">
-        <Box sx={{ my: 4 }}>
-          <Typography variant="h4" component="h1" gutterBottom align="center">
+      <AppBar position="static" color="primary" elevation={0}>
+        <Toolbar>
+          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             AI Planner
           </Typography>
+          <NotificationCenter />
+        </Toolbar>
+      </AppBar>
+      <Container maxWidth="lg">
+        <Box sx={{ my: 4 }}>
+
           
           {!isAuthenticated ? (
             <GmailLogin onAuthSuccess={handleAuthSuccess} />
           ) : (
-            <Box>
+            <>
+              <TextInputTask onTextSubmit={handleTextSubmit} isProcessing={textProcessing} />
+              
+              {error && (
+                <Typography color="error" sx={{ mt: 2 }}>
+                  {error}
+                </Typography>
+              )}
+              
+              <Box sx={{ borderBottom: 1, borderColor: 'divider', mt: 3 }}>
+                <Tabs value={activeTab} onChange={handleTabChange} aria-label="app tabs">
+                  <Tab label="Tasks" />
+                  <Tab label="Settings" />
+                </Tabs>
+              </Box>
+              
               {loading ? (
-                <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
                   <CircularProgress />
                 </Box>
-              ) : error ? (
-                <Typography color="error" align="center">{error}</Typography>
               ) : (
-                <Box>
-                  <TextInputTask 
-                    onTextSubmit={handleTextSubmit} 
-                    loading={textProcessing} 
-                  />
-                  <Grid container spacing={3}>
-                    <Grid item xs={12} md={8}>
-                      <TaskCalendar tasks={tasks.map(task => ({
-                        ...task,
-                        title: task.title || 'Failed to parse task',
-                        description: task.description || 'Text extraction failed',
-                        status: task.status || 'pending',
-                        urgencyLevel: task.urgencyLevel || 3
-                      }))} />
+                <Box sx={{ mt: 2 }}>
+                  {activeTab === 0 && (
+                    <Grid container spacing={3}>
+                      <Grid item xs={12} md={6}>
+                        <TaskList tasks={tasks} onTaskUpdate={handleTaskUpdate} />
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <TaskCalendar tasks={tasks} />
+                      </Grid>
                     </Grid>
-                    <Grid item xs={12} md={4}>
-                      <TaskList 
-                        tasks={tasks.map(task => ({
-                          ...task,
-                          title: task.title || 'Failed to parse task',
-                          description: task.description || 'Text extraction failed',
-                          status: task.status || 'pending',
-                          urgencyLevel: task.urgencyLevel || 3
-                        }))} 
-                        onTaskUpdate={handleTaskUpdate}
-                      />
-                    </Grid>
-                  </Grid>
-                  <EmailList 
-                    emails={emails}
-                    onExtractEmails={fetchEmails}
-                    loading={loading}
-                  />
+                  )}
+                  
+                  {activeTab === 1 && (
+                    <EmailTaskSettings />
+                  )}
                 </Box>
               )}
-            </Box>
+            </>
           )}
         </Box>
       </Container>

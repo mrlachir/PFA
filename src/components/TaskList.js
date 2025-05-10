@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Paper,
   Typography,
@@ -28,19 +28,35 @@ import {
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import { LocalizationProvider, DateTimePicker } from '@mui/x-date-pickers';
 import { format, parseISO, isValid } from 'date-fns';
-import FilterListIcon from '@mui/icons-material/FilterList';
-import SortIcon from '@mui/icons-material/Sort';
+import { loadTasks, saveTasks } from '../services/storageService';
+import { 
+  scheduleTaskReminders, 
+  cancelTaskReminders, 
+  scheduleRemindersForTasks, 
+  notifyTasksExtracted,
+  enableTaskReminders,
+  disableTaskReminders,
+  areRemindersEnabled
+} from '../services/notificationService';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import FlagIcon from '@mui/icons-material/Flag';
+import NotificationsIcon from '@mui/icons-material/Notifications';
+import NotificationsOffIcon from '@mui/icons-material/NotificationsOff';
+import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
 
-const TaskList = ({ tasks, onTaskUpdate }) => {
+const TaskList = ({ tasks = [], onTaskUpdate }) => {
   const theme = useTheme();
+  const [displayedTasks, setDisplayedTasks] = useState([]);
+  const [allTasks, setAllTasks] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [priorityFilter, setPriorityFilter] = useState('all');
   const [sortBy, setSortBy] = useState('dueDate');
-  const [sortDirection, setSortDirection] = useState('asc');
+  const [menuAnchorEl, setMenuAnchorEl] = useState(null);
+  const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editedStartTime, setEditedStartTime] = useState(null);
@@ -48,58 +64,280 @@ const TaskList = ({ tasks, onTaskUpdate }) => {
   const [editedStatus, setEditedStatus] = useState('');
   const [priorityDialogOpen, setPriorityDialogOpen] = useState(false);
   const [selectedTaskForPriority, setSelectedTaskForPriority] = useState(null);
+  const [taskDetailsOpen, setTaskDetailsOpen] = useState(false);
+  const [selectedTaskDetails, setSelectedTaskDetails] = useState(null);
 
-  // Get unique categories from tasks
-  const categories = useMemo(() => {
-    if (!tasks || tasks.length === 0) return [];
-    const uniqueCategories = [...new Set(tasks.map(task => task.category))];
-    return uniqueCategories.filter(Boolean);
+  // Function to handle viewing task details
+  const handleViewTaskDetails = (task) => {
+    setSelectedTaskDetails(task);
+    setTaskDetailsOpen(true);
+  };
+
+  // Function to handle editing a task
+  const handleEditTask = (task) => {
+    setEditingTask(task);
+    setEditedStatus(task.status || 'New');
+    
+    // Initialize the date pickers with the task's times
+    if (task.startTime) {
+      setEditedStartTime(new Date(task.startTime));
+    } else {
+      setEditedStartTime(null);
+    }
+    
+    if (task.endTime) {
+      setEditedEndTime(new Date(task.endTime));
+    } else {
+      setEditedEndTime(null);
+    }
+    
+    setEditDialogOpen(true);
+    // Close the details dialog if it's open
+    if (taskDetailsOpen) {
+      setTaskDetailsOpen(false);
+    }
+  };
+
+  // Function to handle deleting a task
+  const handleDeleteTask = (taskId) => {
+    // Cancel any reminders for this task
+    cancelTaskReminders(taskId);
+    
+    // Remove the task from the list
+    const updatedTasks = allTasks.filter(task => task.id !== taskId);
+    setAllTasks(updatedTasks);
+    saveTasks(updatedTasks);
+  };
+  
+  // Function to toggle reminders for a task
+  const handleToggleReminders = (event, taskId, task) => {
+    // Stop event propagation to prevent card click
+    event.stopPropagation();
+    
+    // Check if reminders are currently enabled
+    const remindersEnabled = areRemindersEnabled(taskId);
+    
+    if (remindersEnabled) {
+      // Disable reminders
+      disableTaskReminders(taskId);
+      // Show notification
+      notifyTasksExtracted([{
+        ...task,
+        title: 'Reminders Disabled',
+        description: `Reminders have been turned off for task: ${task.title}`
+      }]);
+    } else {
+      // Enable reminders
+      enableTaskReminders(taskId, task);
+      // Show notification
+      notifyTasksExtracted([{
+        ...task,
+        title: 'Reminders Enabled',
+        description: `Reminders have been turned on for task: ${task.title}`
+      }]);
+    }
+    
+    // Force a re-render
+    setAllTasks([...allTasks]);
+  };
+
+  useEffect(() => {
+    const storedTasks = loadTasks();
+    if (storedTasks && storedTasks.length > 0) {
+      setAllTasks(storedTasks);
+      // Schedule reminders for all loaded tasks
+      scheduleRemindersForTasks(storedTasks);
+    } else if (tasks && tasks.length > 0) {
+      setAllTasks(tasks);
+      // Schedule reminders for provided tasks
+      scheduleRemindersForTasks(tasks);
+    }
   }, [tasks]);
 
-  // Filter and sort tasks
-  const filteredTasks = useMemo(() => {
-    if (!tasks) return [];
-    
-    return tasks
-      .filter(task => {
-        // Search term filter
-        const matchesSearch = searchTerm === '' || 
-          task.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
-          (task.description && task.description.toLowerCase().includes(searchTerm.toLowerCase()));
-        
-        // Status filter
-        const matchesStatus = statusFilter === 'all' || task.status === statusFilter;
-        
-        // Category filter
-        const matchesCategory = categoryFilter === 'all' || task.category === categoryFilter;
-        
-        return matchesSearch && matchesStatus && matchesCategory;
-      })
-      .sort((a, b) => {
-        // Sort by selected field
-        if (sortBy === 'dueDate') {
-          // Handle null due dates
-          if (!a.dueDate && !b.dueDate) return 0;
-          if (!a.dueDate) return sortDirection === 'asc' ? 1 : -1;
-          if (!b.dueDate) return sortDirection === 'asc' ? -1 : 1;
-          
-          const dateA = parseISO(a.dueDate);
-          const dateB = parseISO(b.dueDate);
-          return sortDirection === 'asc' ? dateA - dateB : dateB - dateA;
-        } else if (sortBy === 'urgencyLevel') {
-          return sortDirection === 'asc' 
-            ? a.urgencyLevel - b.urgencyLevel 
-            : b.urgencyLevel - a.urgencyLevel;
-        } else if (sortBy === 'title') {
-          return sortDirection === 'asc' 
-            ? a.title.localeCompare(b.title) 
-            : b.title.localeCompare(a.title);
-        }
-        return 0;
-      });
-  }, [tasks, searchTerm, statusFilter, categoryFilter, sortBy, sortDirection]);
+  useEffect(() => {
+    filterAndSortTasks();
+  }, [allTasks, searchTerm, statusFilter, priorityFilter, sortBy]);
 
-  // Get urgency color based on level
+  const filterAndSortTasks = () => {
+    let filtered = [...allTasks];
+
+    if (searchTerm) {
+      filtered = filtered.filter(task =>
+        task.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        task.description?.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+
+    if (statusFilter !== 'all') {
+      filtered = filtered.filter(task => {
+        // Convert status values to match the filter options
+        const taskStatus = task.status || 'New';
+        return taskStatus === statusFilter;
+      });
+    }
+
+    if (priorityFilter !== 'all') {
+      filtered = filtered.filter(task => {
+        // Check both urgencyLevel and priority properties
+        if (task.urgencyLevel) {
+          // Convert urgencyLevel to priority string
+          const urgencyToPriority = {
+            5: 'High',
+            4: 'High',
+            3: 'Medium',
+            2: 'Low',
+            1: 'Low'
+          };
+          return urgencyToPriority[task.urgencyLevel] === priorityFilter;
+        } else {
+          // Fall back to priority property if urgencyLevel is not set
+          return task.priority === priorityFilter;
+        }
+      });
+    }
+
+    filtered.sort((a, b) => {
+      switch (sortBy) {
+        case 'dueDate':
+          // Handle cases where dueDate might be missing
+          if (!a.dueDate && !b.dueDate) return 0;
+          if (!a.dueDate) return 1; // Items without dueDate go to the end
+          if (!b.dueDate) return -1;
+          return new Date(a.dueDate) - new Date(b.dueDate);
+          
+        case 'priority':
+          // Map urgencyLevel to priority order
+          const getTaskPriorityValue = (task) => {
+            if (task.urgencyLevel) {
+              // Higher urgencyLevel = higher priority (lower sort value)
+              return 6 - task.urgencyLevel; // Convert 5->1, 4->2, etc.
+            } else if (task.priority) {
+              const priorityOrder = { 'High': 1, 'Medium': 2, 'Low': 3 };
+              return priorityOrder[task.priority] || 4; // Default to lowest priority if unknown
+            } else {
+              return 4; // Default value for items without priority
+            }
+          };
+          
+          const aValue = getTaskPriorityValue(a);
+          const bValue = getTaskPriorityValue(b);
+          return aValue - bValue;
+          
+        case 'title':
+          // Handle missing titles gracefully
+          if (!a.title && !b.title) return 0;
+          if (!a.title) return 1;
+          if (!b.title) return -1;
+          return a.title.localeCompare(b.title);
+          
+        case 'status':
+          // Sort by status: New -> In Progress -> Completed
+          const statusOrder = { 'New': 1, 'In Progress': 2, 'Completed': 3 };
+          const aStatus = statusOrder[a.status || 'New'] || 1;
+          const bStatus = statusOrder[b.status || 'New'] || 1;
+          return aStatus - bStatus;
+          
+        default:
+          return 0;
+      }
+    });
+
+    setDisplayedTasks(filtered);
+  };
+
+  const handleStatusToggle = (taskId) => {
+    const task = allTasks.find(t => t.id === taskId);
+    if (task) {
+      const newStatus = task.status === 'Completed' ? 'In Progress' : 'Completed';
+      const updatedTask = { ...task, status: newStatus };
+
+      const updatedTasks = allTasks.map(t => t.id === taskId ? updatedTask : t);
+      setAllTasks(updatedTasks);
+
+      saveTasks(updatedTasks);
+
+      if (onTaskUpdate) {
+        onTaskUpdate(updatedTask);
+      }
+    }
+  };
+
+  const handleMenuOpen = (event, taskId) => {
+    setMenuAnchorEl(event.currentTarget);
+    setSelectedTaskId(taskId);
+  };
+
+  const handleMenuClose = () => {
+    setMenuAnchorEl(null);
+    setSelectedTaskId(null);
+  };
+
+  const handlePriorityChange = (taskId, level) => {
+    const task = allTasks.find(t => t.id === taskId);
+    if (task) {
+      const updatedTask = { ...task, urgencyLevel: level };
+      const updatedTasks = allTasks.map(t => t.id === taskId ? updatedTask : t);
+      setAllTasks(updatedTasks);
+      saveTasks(updatedTasks);
+      if (onTaskUpdate) {
+        onTaskUpdate(updatedTask);
+      }
+    }
+  };
+
+  const handleChangePriority = (priority) => {
+    const task = allTasks.find(t => t.id === selectedTaskId);
+    if (task) {
+      const updatedTask = { ...task, priority };
+
+      const updatedTasks = allTasks.map(t => t.id === selectedTaskId ? updatedTask : t);
+      setAllTasks(updatedTasks);
+
+      saveTasks(updatedTasks);
+
+      if (onTaskUpdate) {
+        onTaskUpdate(updatedTask);
+      }
+    }
+    handleMenuClose();
+  };
+
+  const handleChangeStatus = (status) => {
+    const task = allTasks.find(t => t.id === selectedTaskId);
+    if (task) {
+      const updatedTask = { ...task, status };
+
+      const updatedTasks = allTasks.map(t => t.id === selectedTaskId ? updatedTask : t);
+      setAllTasks(updatedTasks);
+
+      saveTasks(updatedTasks);
+
+      if (onTaskUpdate) {
+        onTaskUpdate(updatedTask);
+      }
+    }
+    handleMenuClose();
+  };
+
+  const getPriorityColor = (priority) => {
+    switch (priority) {
+      case 'High': return theme.palette.error.main;
+      case 'Medium': return theme.palette.warning.main;
+      case 'Low': return theme.palette.success.main;
+      default: return theme.palette.warning.main;
+    }
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'Completed': return 'success';
+      case 'In Progress': return 'info';
+      case 'New': return 'default';
+      case 'Overdue': return 'error';
+      default: return 'default';
+    }
+  };
+
   const getUrgencyColor = (level) => {
     switch (level) {
       case 1: return '#8bc34a'; // Low - Green
@@ -110,60 +348,66 @@ const TaskList = ({ tasks, onTaskUpdate }) => {
       default: return '#ff9800'; // Default - Orange
     }
   };
-  
-  // Get urgency label based on level
+
   const getUrgencyLabel = (level) => {
     switch (level) {
       case 1: return 'Low';
       case 2: return 'Low-Medium';
       case 3: return 'Medium';
-      case 4: return 'High';
-      case 5: return 'Critical';
+      case 4: return 'Medium-High';
+      case 5: return 'High';
       default: return 'Medium';
     }
   };
-  
-  // Handle priority change
-  const handlePriorityChange = (taskId, newLevel) => {
-    if (onTaskUpdate && taskId) {
-      const updatedTask = tasks.find(task => task.id === taskId);
-      if (updatedTask) {
-        onTaskUpdate({
-          ...updatedTask,
-          urgencyLevel: newLevel
-        });
-      }
-    }
-  };
 
-  // Format date for display
   const formatDateTime = (dateString) => {
     if (!dateString) return 'Not set';
     const date = parseISO(dateString);
-    return isValid(date) ? format(date, 'MMM d, yyyy h:mm a') : 'Invalid date';
+    return isValid(date) ? format(date, 'MMM d, yyyy h:mm a') : 'Invalid Date';
   };
 
-  // Toggle sort direction
-  const handleSortChange = (field) => {
-    if (sortBy === field) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortBy(field);
-      setSortDirection('asc');
+  const formatDate = (dateString) => {
+    if (!dateString) return 'No date';
+
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'Invalid date';
+
+      const today = new Date();
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      if (date.toDateString() === today.toDateString()) {
+        return `Today, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      }
+
+      if (date.toDateString() === tomorrow.toDateString()) {
+        return `Tomorrow, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      }
+
+      return date.toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch (error) {
+      console.error('Error formatting date:', error);
+      return 'Date error';
     }
   };
 
   return (
-    <Paper elevation={3} sx={{ p: 3, borderRadius: 2, overflow: 'hidden', height: '100%' }}>
+    <Paper elevation={3} sx={{ p: 2, borderRadius: 2, overflow: 'hidden', height: '100%' }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Typography variant="h6" component="h2" sx={{ fontWeight: 'bold', color: theme.palette.primary.main }}>
             Task List
           </Typography>
-          <Chip 
-            label={`${filteredTasks.length} ${filteredTasks.length === 1 ? 'task' : 'tasks'}`} 
-            color="primary" 
-            size="small" 
+          <Chip
+            label={`${displayedTasks.length} ${displayedTasks.length === 1 ? 'task' : 'tasks'}`}
+            color="primary"
+            size="small"
             variant="outlined"
             sx={{ ml: 1 }}
           />
@@ -197,65 +441,44 @@ const TaskList = ({ tasks, onTaskUpdate }) => {
                 sx={{ borderRadius: 1.5 }}
               >
                 <MenuItem value="all">All</MenuItem>
-                <MenuItem value="pending">Pending</MenuItem>
-                <MenuItem value="in-progress">In Progress</MenuItem>
-                <MenuItem value="completed">Completed</MenuItem>
+                <MenuItem value="New">New</MenuItem>
+                <MenuItem value="In Progress">In Progress</MenuItem>
+                <MenuItem value="Completed">Completed</MenuItem>
               </Select>
             </FormControl>
           </Grid>
           <Grid item xs={12}>
             <FormControl fullWidth size="small">
-              <InputLabel>Category</InputLabel>
+              <InputLabel>Priority</InputLabel>
               <Select
-                value={categoryFilter}
-                label="Category"
-                onChange={(e) => setCategoryFilter(e.target.value)}
+                value={priorityFilter}
+                label="Priority"
+                onChange={(e) => setPriorityFilter(e.target.value)}
                 sx={{ borderRadius: 1.5 }}
               >
-                <MenuItem value="all">All Categories</MenuItem>
-                {categories.map(category => (
-                  <MenuItem key={category} value={category}>{category}</MenuItem>
-                ))}
+                <MenuItem value="all">All</MenuItem>
+                <MenuItem value="High">High</MenuItem>
+                <MenuItem value="Medium">Medium</MenuItem>
+                <MenuItem value="Low">Low</MenuItem>
               </Select>
             </FormControl>
           </Grid>
-          {/* <Grid item xs={12} md={4}>
-            <Box sx={{ display: 'flex', gap: 1, justifyContent: { xs: 'flex-start', md: 'flex-end' } }}>
-              <Tooltip title="Sort by Due Date">
-                <Chip
-                  icon={<SortIcon />}
-                  label="Due Date"
-                  clickable
-                  color={sortBy === 'dueDate' ? 'primary' : 'default'}
-                  onClick={() => handleSortChange('dueDate')}
-                  variant={sortBy === 'dueDate' ? 'filled' : 'outlined'}
-                  sx={{ borderRadius: 1.5 }}
-                />
-              </Tooltip>
-              <Tooltip title="Sort by Urgency">
-                <Chip
-                  icon={<FlagIcon />}
-                  label="Urgency"
-                  clickable
-                  color={sortBy === 'urgencyLevel' ? 'primary' : 'default'}
-                  onClick={() => handleSortChange('urgencyLevel')}
-                  variant={sortBy === 'urgencyLevel' ? 'filled' : 'outlined'}
-                  sx={{ borderRadius: 1.5 }}
-                />
-              </Tooltip>
-              <Tooltip title="Sort by Title">
-                <Chip
-                  icon={<FilterListIcon />}
-                  label="Title"
-                  clickable
-                  color={sortBy === 'title' ? 'primary' : 'default'}
-                  onClick={() => handleSortChange('title')}
-                  variant={sortBy === 'title' ? 'filled' : 'outlined'}
-                  sx={{ borderRadius: 1.5 }}
-                />
-              </Tooltip>
-            </Box>
-          </Grid> */}
+          <Grid item xs={12}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Sort By</InputLabel>
+              <Select
+                value={sortBy}
+                label="Sort By"
+                onChange={(e) => setSortBy(e.target.value)}
+                sx={{ borderRadius: 1.5 }}
+              >
+                <MenuItem value="dueDate">Due Date</MenuItem>
+                <MenuItem value="priority">Priority</MenuItem>
+                <MenuItem value="status">Status</MenuItem>
+                <MenuItem value="title">Title</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
         </Grid>
       </Paper>
 
@@ -263,7 +486,7 @@ const TaskList = ({ tasks, onTaskUpdate }) => {
 
       {/* Task List */}
       <Box sx={{ mt: 3, maxHeight: { xs: 'calc(100vh - 350px)', md: 'calc(100vh - 300px)' }, overflowY: 'auto', pr: 1, '&::-webkit-scrollbar': { width: '8px' }, '&::-webkit-scrollbar-track': { bgcolor: 'transparent' }, '&::-webkit-scrollbar-thumb': { bgcolor: alpha(theme.palette.primary.main, 0.2), borderRadius: '4px', '&:hover': { bgcolor: alpha(theme.palette.primary.main, 0.3) } } }}>
-        {filteredTasks.length === 0 ? (
+        {displayedTasks.length === 0 ? (
           <Box sx={{ py: 6, textAlign: 'center' }}>
             <Typography variant="body1" color="text.secondary" gutterBottom>
               No tasks found matching your filters
@@ -274,16 +497,21 @@ const TaskList = ({ tasks, onTaskUpdate }) => {
           </Box>
         ) : (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {filteredTasks.map((task) => (
+            {displayedTasks.map((task) => (
             <Card 
               key={task.id} 
               elevation={2} // Slightly reduced elevation for a cleaner look
               onClick={() => {
-                setEditingTask(task);
-                setEditedStartTime(task.startTime ? parseISO(task.startTime) : null);
-                setEditedEndTime(task.endTime ? parseISO(task.endTime) : null);
-                setEditedStatus(task.status);
-                setEditDialogOpen(true);
+                // setEditingTask(task);
+                // Use startTime or dueDate for the start time picker
+                // setEditedStartTime(task.startTime ? parseISO(task.startTime) : 
+                //                  (task.dueDate ? parseISO(task.dueDate) : null));
+                // // Use endTime for the end time picker
+                // setEditedEndTime(task.endTime ? parseISO(task.endTime) : null);
+                // // Set status, defaulting to 'New' if not set
+                // setEditedStatus(task.status || 'New');
+                // setEditDialogOpen(true);
+                // console.log('Opening edit dialog for task:', task);
               }}
               sx={{ 
                 borderLeft: `5px solid ${getUrgencyColor(task.urgencyLevel)}`, // Thicker border
@@ -298,77 +526,83 @@ const TaskList = ({ tasks, onTaskUpdate }) => {
                   borderColor: alpha(getUrgencyColor(task.urgencyLevel), 0.8) // Slightly fade border on hover
                 }
               }}>
-              <CardContent sx={{ p: 2 }}> {/* Consistent padding */} 
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1.5 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                    {/* Removed Avatar for a cleaner look, status indicated by chip below */}
-                    <Box>
-                      <Typography variant="subtitle1" component="h3" sx={{ fontWeight: 600, lineHeight: 1.3 }}> {/* Adjusted typography */} 
-                        {task.title}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
-                        {formatDateTime(task.startTime)} {task.endTime ? `- ${formatDateTime(task.endTime)}` : ''}
-                      </Typography>
-                    </Box>
+              <CardContent sx={{ p: 2 }}> 
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, overflow: 'hidden', flex: 1 }}>
+                    <Typography variant="subtitle2" component="h3" sx={{ fontWeight: 600, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {task.title}
+                    </Typography>
+                    {task.dueDate && (
+                      <Tooltip title={areRemindersEnabled(task.id) ? "Reminders active (click to disable)" : "Reminders disabled (click to enable)"}>
+                        <IconButton
+                          onClick={(e) => handleToggleReminders(e, task.id, task)}
+                          size="small"
+                          sx={{ p: 0, ml: 0.5 }}
+                        >
+                          {areRemindersEnabled(task.id) ? (
+                            <NotificationsActiveIcon fontSize="small" color="primary" sx={{ fontSize: '0.875rem' }} />
+                          ) : (
+                            <NotificationsOffIcon fontSize="small" color="action" sx={{ fontSize: '0.875rem', opacity: 0.5 }} />
+                          )}
+                        </IconButton>
+                      </Tooltip>
+                    )}
                   </Box>
-                  <Tooltip title={`Priority: ${getUrgencyLabel(task.urgencyLevel)}. Click to change.`}>
-                    <Chip
-                      icon={<FlagIcon sx={{ fontSize: '1rem', ml: '3px' }} />} // Add icon to priority chip
-                      size="small"
-                      label={getUrgencyLabel(task.urgencyLevel)}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedTaskForPriority(task);
-                        setPriorityDialogOpen(true);
-                      }}
-                      sx={{ 
-                        bgcolor: alpha(getUrgencyColor(task.urgencyLevel), 0.15),
-                        color: getUrgencyColor(task.urgencyLevel),
-                        fontWeight: 500, // Medium weight
-                        borderRadius: 1,
-                        cursor: 'pointer',
-                        height: '24px', // Consistent height
-                        '.MuiChip-label': { px: '8px' }, // Adjust label padding
-                        '&:hover': {
-                          bgcolor: alpha(getUrgencyColor(task.urgencyLevel), 0.25),
-                        }
-                      }}
-                    />
-                  </Tooltip>
+                  <Chip
+                    size="small"
+                    label={task.status || 'New'}
+                    color={getStatusColor(task.status || 'New')}
+                    sx={{ height: 20, fontSize: '0.7rem', ml: 1 }}
+                  />
                 </Box>
                 
-                {task.description && (
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 1.5, pl: 0.5, fontSize: '0.85rem' }}> {/* Adjusted description style */}
-                    {task.description.length > 100 ? `${task.description.substring(0, 100)}...` : task.description} {/* Truncate long descriptions */} 
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.5, mb: 0.5 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+                    {task.dueDate ? `${formatDateTime(task.dueDate)}` : ''}
+                    {task.startTime && task.endTime ? ` (${formatDateTime(task.startTime).split(' ')[1]} - ${formatDateTime(task.endTime).split(' ')[1]})` : ''}
                   </Typography>
-                )}
+                  
+                  <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                    <Tooltip title="Task Priority">
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <FlagIcon 
+                          fontSize="small" 
+                          sx={{ 
+                            color: getPriorityColor(task.urgencyLevel || task.priority || 'Medium'),
+                            fontSize: '0.875rem'
+                          }} 
+                        />
+                      </Box>
+                    </Tooltip>
+                  </Box>
+                </Box>
                 
-                <Box sx={{ display: 'flex', mt: 1.5, gap: 1, flexWrap: 'wrap', justifyContent: 'flex-start' }}> {/* Align chips left */} 
-                  {task.category && (
-                    <Chip 
-                      label={task.category} 
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.5 }}>
+                  <Button 
+                    size="small" 
+                    variant="text" 
+                    onClick={() => handleViewTaskDetails(task)}
+                    sx={{ fontSize: '0.7rem', p: 0, minWidth: 'auto', textTransform: 'none' }}
+                  >
+                    More Info
+                  </Button>
+                  
+                  <Box>
+                    <IconButton 
                       size="small" 
-                      variant="outlined"
-                      sx={{ borderRadius: 1, fontWeight: 500 }}
-                    />
-                  )}
-                  <Chip 
-                    label={task.status}
-                    icon={task.status === 'completed' ? <CheckCircleIcon sx={{ fontSize: '1rem', ml: '3px' }} /> : <RadioButtonUncheckedIcon sx={{ fontSize: '1rem', ml: '3px' }} />} // Add icon to status chip
-                    size="small"
-                    sx={{ 
-                      borderRadius: 1,
-                      fontWeight: 500,
-                      bgcolor: task.status === 'completed' ? alpha(theme.palette.success.main, 0.1) : 
-                              task.status === 'in-progress' ? alpha(theme.palette.info.main, 0.1) : 
-                              alpha(theme.palette.grey[500], 0.1),
-                      color: task.status === 'completed' ? theme.palette.success.dark : 
-                             task.status === 'in-progress' ? theme.palette.info.dark : 
-                             theme.palette.grey[700],
-                      height: '24px', // Consistent height
-                      '.MuiChip-label': { px: '8px' }, // Adjust label padding
-                    }}
-                  />
+                      onClick={() => handleEditTask(task)}
+                      sx={{ p: 0.5 }}
+                    >
+                      <EditIcon fontSize="small" sx={{ fontSize: '0.875rem' }} />
+                    </IconButton>
+                    <IconButton 
+                      size="small" 
+                      onClick={() => handleDeleteTask(task.id)}
+                      sx={{ p: 0.5, ml: 0.5 }}
+                    >
+                      <DeleteIcon fontSize="small" sx={{ fontSize: '0.875rem' }} />
+                    </IconButton>
+                  </Box>
                 </Box>
               </CardContent>
             </Card>
@@ -397,11 +631,15 @@ const TaskList = ({ tasks, onTaskUpdate }) => {
         <DialogContent sx={{ pt: 3 }}>
           <Box>
             <LocalizationProvider dateAdapter={AdapterDateFns}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'medium' }}>Time Range</Typography>
               <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
                 <DateTimePicker
                   label="Start Time"
                   value={editedStartTime}
-                  onChange={setEditedStartTime}
+                  onChange={(newValue) => {
+                    setEditedStartTime(newValue);
+                    console.log('New start time:', newValue);
+                  }}
                   sx={{ flex: 1 }}
                   slotProps={{
                     textField: {
@@ -414,7 +652,10 @@ const TaskList = ({ tasks, onTaskUpdate }) => {
                 <DateTimePicker
                   label="End Time"
                   value={editedEndTime}
-                  onChange={setEditedEndTime}
+                  onChange={(newValue) => {
+                    setEditedEndTime(newValue);
+                    console.log('New end time:', newValue);
+                  }}
                   sx={{ flex: 1 }}
                   slotProps={{
                     textField: {
@@ -426,6 +667,47 @@ const TaskList = ({ tasks, onTaskUpdate }) => {
                 />
               </Box>
             </LocalizationProvider>
+            
+            <Box sx={{ mt: 3 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'medium' }}>Priority</Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 2 }}>
+                {[5, 4, 3, 2, 1].map((level) => (
+                  <Button
+                    key={level}
+                    variant={editingTask?.urgencyLevel === level ? 'contained' : 'outlined'}
+                    onClick={() => {
+                      setEditingTask(prev => ({ ...prev, urgencyLevel: level }));
+                    }}
+                    startIcon={
+                      <Box 
+                        sx={{ 
+                          width: 12, 
+                          height: 12, 
+                          borderRadius: '50%', 
+                          bgcolor: getUrgencyColor(level),
+                          display: 'inline-block'
+                        }} 
+                      />
+                    }
+                    sx={{
+                      justifyContent: 'flex-start',
+                      borderColor: alpha(getUrgencyColor(level), 0.3),
+                      color: editingTask?.urgencyLevel === level ? 'white' : getUrgencyColor(level),
+                      bgcolor: editingTask?.urgencyLevel === level ? getUrgencyColor(level) : 'transparent',
+                      '&:hover': {
+                        bgcolor: editingTask?.urgencyLevel === level 
+                          ? getUrgencyColor(level) 
+                          : alpha(getUrgencyColor(level), 0.1),
+                        borderColor: getUrgencyColor(level)
+                      }
+                    }}
+                  >
+                    {getUrgencyLabel(level)}
+                  </Button>
+                ))}
+              </Box>
+            </Box>
+            
             <FormControl fullWidth sx={{ mt: 2 }}>
               <InputLabel>Status</InputLabel>
               <Select
@@ -435,9 +717,9 @@ const TaskList = ({ tasks, onTaskUpdate }) => {
                 size="small"
                 sx={{ borderRadius: 1.5 }}
               >
-                <MenuItem value="pending">Pending</MenuItem>
-                <MenuItem value="in-progress">In Progress</MenuItem>
-                <MenuItem value="completed">Completed</MenuItem>
+                <MenuItem value="New">New</MenuItem>
+                <MenuItem value="In Progress">In Progress</MenuItem>
+                <MenuItem value="Completed">Completed</MenuItem>
               </Select>
             </FormControl>
           </Box>
@@ -450,15 +732,58 @@ const TaskList = ({ tasks, onTaskUpdate }) => {
           >
             Cancel
           </Button>
-          <Button 
-            onClick={() => {
-              if (editingTask && onTaskUpdate) {
-                onTaskUpdate({
+          <Button              onClick={() => {
+              if (editingTask) {
+                // Cancel existing reminders for this task
+                cancelTaskReminders(editingTask.id);
+                
+                const updatedTask = {
                   ...editingTask,
                   startTime: editedStartTime ? format(editedStartTime, "yyyy-MM-dd'T'HH:mm:ss.SSSxxx") : null,
                   endTime: editedEndTime ? format(editedEndTime, "yyyy-MM-dd'T'HH:mm:ss.SSSxxx") : null,
-                  status: editedStatus
-                });
+                  dueDate: editedStartTime ? format(editedStartTime, "yyyy-MM-dd'T'HH:mm:ss.SSSxxx") : editingTask.dueDate,
+                  status: editedStatus,
+                  urgencyLevel: editingTask.urgencyLevel
+                };
+                
+                console.log('Saving updated task:', updatedTask);
+                
+                // Update the task in allTasks
+                const updatedTasks = allTasks.map(t => 
+                  t.id === editingTask.id ? updatedTask : t
+                );
+                
+                // Update state and storage
+                setAllTasks(updatedTasks);
+                saveTasks(updatedTasks);
+                
+                // Schedule reminders for the updated task
+                if (updatedTask.dueDate) {
+                  scheduleTaskReminders(updatedTask);
+                  
+                  // Close the dialog first
+                  setEditDialogOpen(false);
+                  
+                  // Format date for display
+                  const dueDate = new Date(updatedTask.dueDate);
+                  const formattedDate = dueDate.toLocaleDateString() + ' ' + dueDate.toLocaleTimeString();
+                  
+                  // Show notification using the notification system
+                  const message = `Task due: ${formattedDate}
+
+Reminders set for:
+- 1 day before
+- 1 hour before
+- 10 minutes before`;
+                  
+                  // Use the notifySystem function from notification service
+                  notifyTasksExtracted([updatedTask]);
+                }
+                
+                // Call the onTaskUpdate callback if provided
+                if (onTaskUpdate) {
+                  onTaskUpdate(updatedTask);
+                }
               }
               setEditDialogOpen(false);
               setEditingTask(null);
@@ -539,6 +864,159 @@ const TaskList = ({ tasks, onTaskUpdate }) => {
             Cancel
           </Button>
         </DialogActions>
+      </Dialog>
+
+      {/* Task Details Dialog */}
+      <Dialog
+        open={taskDetailsOpen}
+        onClose={() => setTaskDetailsOpen(false)}
+        PaperProps={{
+          sx: { borderRadius: 2, overflow: 'hidden', maxWidth: 500 }
+        }}
+      >
+        {selectedTaskDetails && (
+          <>
+            <DialogTitle sx={{ bgcolor: alpha(theme.palette.primary.main, 0.05) }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Typography variant="h6">Task Details</Typography>
+                <Chip
+                  size="small"
+                  label={selectedTaskDetails.status || 'New'}
+                  color={getStatusColor(selectedTaskDetails.status || 'New')}
+                />
+              </Box>
+            </DialogTitle>
+            <DialogContent sx={{ pt: 2, pb: 1, px: 3 }}>
+              <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold', color: theme.palette.text.primary }}>
+                {selectedTaskDetails.title}
+              </Typography>
+              
+              <Grid container spacing={2} sx={{ mt: 1 }}>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2" color="text.secondary">Due Date</Typography>
+                  <Typography variant="body2">
+                    {selectedTaskDetails.dueDate ? formatDate(selectedTaskDetails.dueDate) : 'Not set'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2" color="text.secondary">Priority</Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', mt: 0.5 }}>
+                    <FlagIcon 
+                      fontSize="small" 
+                      sx={{ 
+                        color: getPriorityColor(selectedTaskDetails.urgencyLevel || selectedTaskDetails.priority || 'Medium'),
+                        mr: 1
+                      }} 
+                    />
+                    <Typography variant="body2">
+                      {getUrgencyLabel(selectedTaskDetails.urgencyLevel) || selectedTaskDetails.priority || 'Medium'}
+                    </Typography>
+                  </Box>
+                </Grid>
+                
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2" color="text.secondary">Start Time</Typography>
+                  <Typography variant="body2">
+                    {selectedTaskDetails.startTime ? formatDateTime(selectedTaskDetails.startTime) : 'Not set'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2" color="text.secondary">End Time</Typography>
+                  <Typography variant="body2">
+                    {selectedTaskDetails.endTime ? formatDateTime(selectedTaskDetails.endTime) : 'Not set'}
+                  </Typography>
+                </Grid>
+              </Grid>
+              
+              {selectedTaskDetails.description && (
+                <Box sx={{ mt: 3 }}>
+                  <Typography variant="subtitle2" color="text.secondary">Description</Typography>
+                  <Typography variant="body2" sx={{ mt: 1, whiteSpace: 'pre-wrap' }}>
+                    {selectedTaskDetails.description}
+                  </Typography>
+                </Box>
+              )}
+              
+              {selectedTaskDetails.category && (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="subtitle2" color="text.secondary">Category</Typography>
+                  <Chip 
+                    label={selectedTaskDetails.category} 
+                    size="small" 
+                    variant="outlined"
+                    sx={{ mt: 0.5 }}
+                  />
+                </Box>
+              )}
+              
+              {selectedTaskDetails.dueDate && (
+                <Box sx={{ mt: 3, p: 2, bgcolor: alpha(theme.palette.primary.main, 0.05), borderRadius: 1 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center' }}>
+                      {areRemindersEnabled(selectedTaskDetails.id) ? (
+                        <NotificationsActiveIcon fontSize="small" sx={{ mr: 1, color: theme.palette.primary.main }} />
+                      ) : (
+                        <NotificationsOffIcon fontSize="small" sx={{ mr: 1, color: theme.palette.text.secondary }} />
+                      )}
+                      {areRemindersEnabled(selectedTaskDetails.id) ? 'Reminders Active' : 'Reminders Disabled'}
+                    </Typography>
+                    
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color={areRemindersEnabled(selectedTaskDetails.id) ? 'primary' : 'default'}
+                      startIcon={areRemindersEnabled(selectedTaskDetails.id) ? <NotificationsOffIcon /> : <NotificationsActiveIcon />}
+                      onClick={() => {
+                        if (areRemindersEnabled(selectedTaskDetails.id)) {
+                          disableTaskReminders(selectedTaskDetails.id);
+                        } else {
+                          enableTaskReminders(selectedTaskDetails.id, selectedTaskDetails);
+                        }
+                        // Force re-render by setting state
+                        setSelectedTaskDetails({...selectedTaskDetails});
+                        setAllTasks([...allTasks]);
+                      }}
+                    >
+                      {areRemindersEnabled(selectedTaskDetails.id) ? 'Disable' : 'Enable'}
+                    </Button>
+                  </Box>
+                  
+                  {areRemindersEnabled(selectedTaskDetails.id) ? (
+                    <Typography variant="body2" sx={{ mt: 1 }}>
+                      You will be notified:
+                      <Box component="ul" sx={{ mt: 0.5, pl: 2 }}>
+                        <li>1 day before due date</li>
+                        <li>1 hour before due date</li>
+                        <li>10 minutes before due date</li>
+                      </Box>
+                    </Typography>
+                  ) : (
+                    <Typography variant="body2" sx={{ mt: 1, color: theme.palette.text.secondary }}>
+                      Reminders are currently turned off for this task.
+                    </Typography>
+                  )}
+                </Box>
+              )}
+            </DialogContent>
+            <DialogActions sx={{ px: 3, pb: 2 }}>
+              <Button 
+                onClick={() => handleEditTask(selectedTaskDetails)} 
+                color="primary" 
+                variant="outlined"
+                startIcon={<EditIcon />}
+              >
+                Edit Task
+              </Button>
+              <Button 
+                onClick={() => setTaskDetailsOpen(false)} 
+                color="primary"
+                variant="contained"
+              >
+                Close
+              </Button>
+            </DialogActions>
+          </>
+        )}
       </Dialog>
     </Paper>
   );

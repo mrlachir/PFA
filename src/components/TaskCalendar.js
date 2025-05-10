@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Paper, Typography, Box, Grid, Chip, Tooltip, IconButton, useTheme, alpha, Button, ButtonGroup } from '@mui/material';
 import { LocalizationProvider, DateCalendar, PickersDay } from '@mui/x-date-pickers';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
@@ -10,23 +10,44 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import ViewDayIcon from '@mui/icons-material/ViewDay';
 import ViewWeekIcon from '@mui/icons-material/ViewWeek';
 import TodayIcon from '@mui/icons-material/Today';
+import EmailIcon from '@mui/icons-material/Email';
+import FlagIcon from '@mui/icons-material/Flag';
+import { loadTasks } from '../services/storageService';
 
-const TaskCalendar = ({ tasks }) => {
+const TaskCalendar = ({ tasks: propTasks = [] }) => {
   const theme = useTheme();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [highlightedDates, setHighlightedDates] = useState([]);
   const [viewMode] = useState('week'); // Only week view is available
   const [weekStart, setWeekStart] = useState(startOfWeek(new Date(), { weekStartsOn: 0 }));
-
-  // Log the incoming tasks prop
-  console.log('TaskCalendar received tasks:', tasks);
+  const [tasks, setTasks] = useState([]);
+  
+  // Load tasks from storage on component mount
+  useEffect(() => {
+    const storedTasks = loadTasks();
+    if (storedTasks && storedTasks.length > 0) {
+      setTasks(storedTasks);
+    } else if (propTasks && propTasks.length > 0) {
+      setTasks(propTasks);
+    }
+    
+    console.log('TaskCalendar loaded tasks:', storedTasks || propTasks);
+  }, [propTasks]);
 
   // Process tasks to get dates with tasks
-  React.useEffect(() => {
+  useEffect(() => {
     if (tasks && tasks.length > 0) {
       const dates = tasks
-        .filter(task => task.startTime)
-        .map(task => parseISO(task.startTime));
+        .filter(task => task.dueDate)
+        .map(task => {
+          try {
+            return parseISO(task.dueDate);
+          } catch (error) {
+            console.error('Error parsing date:', task.dueDate, error);
+            return null;
+          }
+        })
+        .filter(date => date !== null && isValid(date));
       setHighlightedDates(dates);
     }
   }, [tasks]);
@@ -36,15 +57,33 @@ const TaskCalendar = ({ tasks }) => {
     if (!tasks || tasks.length === 0) return [];
     
     return tasks.filter(task => {
-      if (!task.startTime) return false;
-      const taskDate = parseISO(task.startTime);
-      return isEqual(
-        new Date(taskDate.getFullYear(), taskDate.getMonth(), taskDate.getDate()),
-        new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate())
-      );
+      if (!task.dueDate) return false;
+      
+      try {
+        const taskDate = parseISO(task.dueDate);
+        if (!isValid(taskDate)) return false;
+        
+        return isEqual(
+          new Date(taskDate.getFullYear(), taskDate.getMonth(), taskDate.getDate()),
+          new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate())
+        );
+      } catch (error) {
+        console.error('Error parsing task date:', error);
+        return false;
+      }
     });
   };
 
+  // Get color based on priority
+  const getPriorityColor = (priority) => {
+    switch (priority) {
+      case 'High': return '#f44336'; // Red
+      case 'Medium': return '#ff9800'; // Orange
+      case 'Low': return '#4caf50'; // Green
+      default: return '#ff9800'; // Default - Orange
+    }
+  };
+  
   // Get urgency color based on level
   const getUrgencyColor = (level) => {
     switch (level) {
@@ -107,59 +146,30 @@ const TaskCalendar = ({ tasks }) => {
   // Get tasks for a specific day and time slot
   const getTasksForTimeSlot = (date, hour) => {
     if (!tasks || tasks.length === 0) return [];
-    
-    // Log input for getTasksForTimeSlot
-    console.log(`getTasksForTimeSlot called for date: ${date.toISOString()}, hour: ${hour}`);
 
     const tasksInSlot = tasks.filter(task => {
-      if (!task.startTime) return false;
-      const taskStartDate = parseISO(task.startTime);
-      if (!isValid(taskStartDate)) {
-          console.log(`Invalid startTime for task ${task.id || 'unknown'}:`, task.startTime);
-          return false;
-      }
-
-      // Default end time is 1 hour after start time if not provided or invalid
-      let taskEndDate;
-      if (task.endTime) {
-          const parsedEnd = parseISO(task.endTime);
-          if (isValid(parsedEnd)) {
-              taskEndDate = parsedEnd;
-          } else {
-              console.log(`Invalid endTime for task ${task.id || 'unknown'}:`, task.endTime, ' defaulting to 1 hour duration.');
-              taskEndDate = addHours(taskStartDate, 1);
-          }
-      } else {
-          taskEndDate = addHours(taskStartDate, 1);
-      }
-
-      // Check if the task's date matches the slot's date
-      const isSameDay = isEqual(
+      if (!task.dueDate) return false;
+      
+      try {
+        const taskDate = parseISO(task.dueDate);
+        if (!isValid(taskDate)) return false;
+        
+        // Check if the task's date matches the slot's date
+        const isSameDay = isEqual(
           new Date(date.getFullYear(), date.getMonth(), date.getDate()),
-          new Date(taskStartDate.getFullYear(), taskStartDate.getMonth(), taskStartDate.getDate())
-      );
-
-      if (!isSameDay) {
-          return false; // Task is not on this day
+          new Date(taskDate.getFullYear(), taskDate.getMonth(), taskDate.getDate())
+        );
+        
+        if (!isSameDay) return false;
+        
+        // Check if the task's hour matches the current hour
+        const taskHour = getHours(taskDate);
+        return taskHour === hour;
+      } catch (error) {
+        console.error('Error parsing task date in time slot:', error);
+        return false;
       }
-
-      // Define the time boundaries for the current slot (e.g., 8:00 to 9:00)
-      const slotStartTime = setMinutes(setHours(new Date(date), hour), 0);
-      const slotEndTime = addHours(slotStartTime, 1);
-
-      // Check for overlap: Task ends after slot starts AND Task starts before slot ends
-      const taskOverlapsSlot = taskEndDate > slotStartTime && taskStartDate < slotEndTime;
-
-      // Log filtering decision
-      // console.log(`Task ${task.id || 'unknown'} on ${date.toISOString()}: Slot [${hour}:00-${hour+1}:00], Task [${format(taskStartDate, 'HH:mm')}-${format(taskEndDate, 'HH:mm')}], Overlaps=${taskOverlapsSlot}`);
-
-      return taskOverlapsSlot;
     });
-
-    // Log the result of getTasksForTimeSlot
-    if (tasksInSlot.length > 0) {
-      console.log(`Tasks found for hour ${hour} on ${date.toISOString()}:`, tasksInSlot);
-    }
 
     return tasksInSlot;
   };
@@ -246,31 +256,20 @@ const TaskCalendar = ({ tasks }) => {
           durationInSlotMinutes = Math.max(5, durationInSlotMinutes); // Min 5 minutes visual representation
 
           let taskHeight = (durationInSlotMinutes / 60) * 100;
-          
           // Cap height by remaining space
           taskHeight = Math.min(taskHeight, 100 - topOffset);
           
           // Ensure height is not negative
           taskHeight = Math.max(0, taskHeight);
 
-          // Format start/end times for tooltip
-          const startTimeString = formatDateTime(task.startTime);
-          let endTimeString = task.endTime ? formatDateTime(task.endTime) : formatDateTime(taskEndDate); // Use calculated default if needed 
-
-          // Log positioning calculation
-          // console.log(`Task ${task.id || 'unknown'} positioning: top=${topOffset}%, height=${taskHeight}%, duration=${durationMinutes}min`);
-
           // Skip rendering if height is non-positive
           if (taskHeight <= 0) {
-            console.log(`Skipping task ${task.id || 'unknown'} due to non-positive height: ${taskHeight}`);
             return null;
           }
 
-          // Removed duplicate declaration
-
           return (
             <Tooltip 
-              title={`${task.title} | ${startTimeString} - ${endTimeString}`} 
+              title={`${task.title}`} 
               arrow 
               key={task.id}
             >
@@ -283,21 +282,21 @@ const TaskCalendar = ({ tasks }) => {
                   height: `${taskHeight}%`, 
                   minHeight: '20px', 
                   borderRadius: '4px',
-                  bgcolor: alpha(getUrgencyColor(task.urgencyLevel), 0.7), 
-                  border: `1px solid ${getUrgencyColor(task.urgencyLevel)}`,
+                  bgcolor: alpha(task.urgencyLevel ? getUrgencyColor(task.urgencyLevel) : getPriorityColor(task.priority || 'Medium'), 0.7), 
+                  border: `1px solid ${task.urgencyLevel ? getUrgencyColor(task.urgencyLevel) : getPriorityColor(task.priority || 'Medium')}`,
                   p: '2px 4px', 
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                   fontSize: '0.7rem', 
-                  color: theme.palette.getContrastText(alpha(getUrgencyColor(task.urgencyLevel), 0.7)), 
+                  color: theme.palette.getContrastText(alpha(task.urgencyLevel ? getUrgencyColor(task.urgencyLevel) : getPriorityColor(task.priority || 'Medium'), 0.7)), 
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'flex-start', 
                   zIndex: 1, 
                   boxShadow: `0 1px 2px ${alpha(theme.palette.common.black, 0.2)}`, 
                   '&:hover': {
-                    bgcolor: alpha(getUrgencyColor(task.urgencyLevel), 0.9),
+                    bgcolor: alpha(task.urgencyLevel ? getUrgencyColor(task.urgencyLevel) : getPriorityColor(task.priority || 'Medium'), 0.9),
                     boxShadow: `0 2px 4px ${alpha(theme.palette.common.black, 0.3)}`,
                     zIndex: 2, 
                   }

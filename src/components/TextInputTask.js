@@ -13,7 +13,7 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import SendIcon from '@mui/icons-material/Send';
 
-const TextInputTask = ({ onTextSubmit, loading }) => {
+const TextInputTask = ({ onTextSubmit, isProcessing }) => {
   const [inputText, setInputText] = useState('');
   const [alert, setAlert] = useState({ show: false, message: '', severity: 'info' });
 
@@ -78,12 +78,12 @@ const TextInputTask = ({ onTextSubmit, loading }) => {
       <Button
         variant="contained"
         color="primary"
-        endIcon={loading ? <CircularProgress size={20} color="inherit" /> : <SendIcon />}
+        endIcon={isProcessing ? <CircularProgress size={20} color="inherit" /> : <SendIcon />}
         onClick={handleSubmit}
-        disabled={loading}
+        disabled={isProcessing}
         fullWidth
       >
-        {loading ? 'Processing...' : 'Generate Tasks'}
+        {isProcessing ? 'Processing...' : 'Generate Tasks'}
       </Button>
     </Paper>
   );

@@ -41,6 +41,15 @@ function generateTaskId() {
 const HF_API_URL = 'https://api-inference.huggingface.co/models/google/flan-t5-base';
 const HF_API_TOKEN = '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';
 
+// Backup model in case the primary model fails
+const BACKUP_HF_API_URL = 'https://api-inference.huggingface.co/models/google/flan-t5-large';
+
+// Maximum retries for API calls
+const MAX_API_RETRIES = 3;
+
+// Delay between retries (in milliseconds)
+const RETRY_DELAY = 1000;
+
 /**
  * Extract tasks from user-provided text input
  * @param {string} text - The text input from the user
@@ -53,13 +62,16 @@ export async function extractTasksFromText(text) {
       return [];
     }
 
-    // Task identification and priority prompt
-    const taskPrompt = `Analyze this text and extract:
-1. The main task or to-do item
-2. Priority level (CRITICAL/HIGH/MEDIUM/LOW) based on urgency words and context
-3. Time constraints (specific start and end times)
-4. Hard deadline if mentioned
+    // Enhanced task identification and priority prompt with more context
+    const taskPrompt = `Analyze this text and extract the following information in a structured format:
 
+1. Task: The main task or to-do item (be specific and actionable)
+2. Priority: Level (CRITICAL/HIGH/MEDIUM/LOW) based on urgency words, deadlines, and context
+3. Time: Any specific start and end times mentioned (in format like "9:00am to 11:00am")
+4. Deadline: Any hard deadline mentioned (specific date or relative like "tomorrow")
+5. Context: Any additional context that helps understand the task better
+
+If there are multiple tasks, focus on the most important one.
 If there's no task, respond with 'No task found'.
 
 Text: ${text}`;
@@ -182,28 +194,58 @@ Text: ${text}`;
  * @param {string} text - The text input from the user
  * @returns {Array} - List of extracted tasks
  */
+/**
+ * Enhanced fallback function to extract tasks when the API call fails
+ * Uses more sophisticated regex patterns and heuristics to identify potential tasks
+ * @param {string} text - The text input from the user
+ * @returns {Array} - List of extracted tasks
+ */
 function extractTasksWithFallback(text) {
-  console.log('Using fallback extraction method for text:', text.substring(0, 50) + '...');
+  console.log('Using enhanced fallback extraction method for text:', text.substring(0, 50) + '...');
   
   try {
-    // Simple regex to find potential task statements
+    // Enhanced regex patterns to find potential task statements
     const taskPatterns = [
+      // Direct task indicators
       /I need to ([^.,;!?]+)/i,
       /have to ([^.,;!?]+)/i,
       /must ([^.,;!?]+)/i,
       /should ([^.,;!?]+)/i,
       /don't forget to ([^.,;!?]+)/i,
-      /remember to ([^.,;!?]+)/i
+      /remember to ([^.,;!?]+)/i,
+      /going to ([^.,;!?]+)/i,
+      /plan(?:ning)? to ([^.,;!?]+)/i,
+      
+      // Task with deadline indicators
+      /([^.,;!?]+) by ([^.,;!?]+)/i,
+      /([^.,;!?]+) due (?:on|by) ([^.,;!?]+)/i,
+      /([^.,;!?]+) before ([^.,;!?]+)/i,
+      
+      // Imperative statements (often tasks)
+      /^([A-Z][^.,;!?]+)[.!]?$/im,
+      
+      // Meeting or appointment indicators
+      /meeting (?:about|on|for) ([^.,;!?]+)/i,
+      /appointment (?:with|for) ([^.,;!?]+)/i,
+      /call (?:with|to) ([^.,;!?]+)/i
     ];
     
     let taskTitle = null;
+    let deadlineHint = null;
     
     // Try each pattern until we find a match
     for (const pattern of taskPatterns) {
       const match = text.match(pattern);
-      if (match && match[1]) {
-        taskTitle = match[1].trim();
-        break;
+      if (match) {
+        // For patterns with deadline hints (the ones with two capture groups)
+        if (match[2]) {
+          taskTitle = match[1].trim();
+          deadlineHint = match[2].trim();
+        } else if (match[1]) {
+          taskTitle = match[1].trim();
+        }
+        
+        if (taskTitle) break;
       }
     }
     
@@ -305,24 +347,56 @@ function extractTasksWithFallback(text) {
  * @param {string} prompt - The prompt to send to the API
  * @returns {Promise<string>} - The model's response
  */
-async function callHuggingFaceAPI(prompt) {
+/**
+ * Call the Hugging Face API with a prompt and retry logic
+ * @param {string} prompt - The prompt to send to the API
+ * @param {number} retryCount - Current retry attempt (internal use)
+ * @param {boolean} useBackupModel - Whether to use the backup model
+ * @returns {Promise<string>} - The model's response
+ */
+async function callHuggingFaceAPI(prompt, retryCount = 0, useBackupModel = false) {
   try {
     console.log('Calling Hugging Face API with prompt:', prompt.substring(0, 100) + '...');
     
-    const response = await fetch(HF_API_URL, {
+    // Select the appropriate API URL based on whether we're using the backup model
+    const apiUrl = useBackupModel ? BACKUP_HF_API_URL : HF_API_URL;
+    
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${HF_API_TOKEN}`
       },
       body: JSON.stringify({
-        inputs: prompt
+        inputs: prompt,
+        parameters: {
+          max_length: 512,
+          temperature: 0.7,  // Add some randomness for more creative responses
+          top_p: 0.9,        // Nucleus sampling for better quality
+          do_sample: true    // Enable sampling
+        }
       }),
     });
+
+    // Handle rate limiting (429) with exponential backoff
+    if (response.status === 429 && retryCount < MAX_API_RETRIES) {
+      const delay = RETRY_DELAY * Math.pow(2, retryCount);
+      console.warn(`Rate limited by API, retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_API_RETRIES})`);
+      
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return callHuggingFaceAPI(prompt, retryCount + 1, useBackupModel);
+    }
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'No error details available');
       console.error(`API request failed with status ${response.status}:`, errorText);
+      
+      // If we haven't tried the backup model yet and we've exhausted retries or got a 5xx error
+      if (!useBackupModel && (retryCount >= MAX_API_RETRIES || response.status >= 500)) {
+        console.log('Trying backup model...');
+        return callHuggingFaceAPI(prompt, 0, true);
+      }
+      
       throw new Error(`API request failed with status ${response.status}: ${errorText}`);
     }
 
@@ -331,6 +405,13 @@ async function callHuggingFaceAPI(prompt) {
     
     if (!generatedText) {
       console.error('API returned empty response:', result);
+      
+      // If we haven't tried the backup model yet
+      if (!useBackupModel) {
+        console.log('Received empty response, trying backup model...');
+        return callHuggingFaceAPI(prompt, 0, true);
+      }
+      
       throw new Error('API returned empty response');
     }
     
@@ -338,6 +419,22 @@ async function callHuggingFaceAPI(prompt) {
     return generatedText;
   } catch (error) {
     console.error('Error calling Hugging Face API:', error);
+    
+    // If we haven't exhausted our retries yet
+    if (retryCount < MAX_API_RETRIES) {
+      const delay = RETRY_DELAY * Math.pow(2, retryCount);
+      console.warn(`API call failed, retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_API_RETRIES})`);
+      
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return callHuggingFaceAPI(prompt, retryCount + 1, useBackupModel);
+    }
+    
+    // If we haven't tried the backup model yet
+    if (!useBackupModel) {
+      console.log('Trying backup model after error...');
+      return callHuggingFaceAPI(prompt, 0, true);
+    }
+    
     throw new Error(`Failed to process with NLP model: ${error.message}`);
   }
 }
